@@ -3,6 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { reviewProfileCompletenessQuery, subnetsQuery } from "@/lib/metagraphed/queries";
 import { classNames } from "@/lib/metagraphed/format";
+import { missingKinds } from "./coverage-matrix-summary";
 import { InfoTooltip } from "@jsonbored/ui-kit";
 import type { Subnet } from "@/lib/metagraphed/types";
 
@@ -127,7 +128,62 @@ export function CoverageMatrix({ topN = 24 }: { topN?: number }) {
         </div>
       </header>
 
-      <div className="overflow-x-auto">
+      {/* < md: the 9-kind matrix scrolls its gap columns (dashboard/data/sdk/
+          example/rpc) off-screen with no scroll cue, so a mobile reader sees
+          only the first ~4 green cells and misreads it as full coverage (#5310).
+          Each subnet gets its completeness score (the same signal as the desktop
+          "Comp" column) plus an explicit list of any missing kinds instead. */}
+      <ul className="md:hidden space-y-2">
+        {rows.map((r) => {
+          const miss = missingKinds(r.cells, KINDS);
+          const pct = Math.round(r.completeness * 100);
+          return (
+            <li key={r.netuid}>
+              <Link
+                to="/subnets/$netuid"
+                params={{ netuid: r.netuid }}
+                className="block rounded border border-border bg-card p-3 hover:border-ink/30"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <span className="font-mono text-[10px] text-ink-muted">SN{r.netuid}</span>
+                    <span className="truncate text-sm text-ink-strong">{r.name}</span>
+                  </span>
+                  <span
+                    className={classNames(
+                      "shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums",
+                      pct >= 100
+                        ? "bg-health-ok/20 text-health-ok"
+                        : pct >= 50
+                          ? "bg-health-warn/20 text-health-warn"
+                          : "bg-health-down/20 text-health-down",
+                    )}
+                  >
+                    {pct}% complete
+                  </span>
+                </div>
+                {miss.length > 0 ? (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-health-down">
+                      missing
+                    </span>
+                    {miss.map((k) => (
+                      <span
+                        key={k}
+                        className="rounded border border-border bg-paper/40 px-1.5 py-0.5 font-mono text-[10px] text-ink-muted"
+                      >
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full border-collapse text-[11px] font-mono">
           <thead>
             <tr className="bg-paper/30">
