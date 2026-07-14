@@ -51,6 +51,8 @@ interface Props {
   generatedAt?: string;
   stale?: boolean;
   banner?: ReactNode;
+  /** Header actions (e.g. ShareButton), rendered top-right of the identity row. */
+  actions?: ReactNode;
   uptimePct?: number | null;
   evidenceCount?: number;
 }
@@ -167,6 +169,7 @@ export function SubnetMasthead({
   generatedAt,
   stale,
   banner,
+  actions,
   uptimePct,
   evidenceCount,
 }: Props) {
@@ -369,27 +372,37 @@ export function SubnetMasthead({
           />
         </div>
         <div className="min-w-0">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h1 className="font-display text-2xl md:text-3xl font-semibold tracking-[-0.01em] text-ink-strong truncate">
-              {name}
-            </h1>
-            {profile?.symbol ? (
-              <span className="font-mono text-sm text-ink-muted">{profile.symbol}</span>
-            ) : null}
-            {profile?.subnet_type ? (
-              <span className="rounded border border-border bg-surface/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink-muted">
-                {profile.subnet_type}
-              </span>
-            ) : null}
-            {categories.map((c) => (
-              <span
-                key={c}
-                className="rounded border border-border/60 bg-paper px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink-muted"
-              >
-                {c}
-              </span>
-            ))}
+          {/* Title line — name + symbol only, with header actions pinned
+              right. Keeping this to a single short row means the actions never
+              steal width from (and crowd) the taxonomy row below. */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <h1 className="font-display text-2xl md:text-3xl font-semibold tracking-[-0.01em] text-ink-strong truncate">
+                {name}
+              </h1>
+              {profile?.symbol ? (
+                <span className="shrink-0 font-mono text-sm text-ink-muted">{profile.symbol}</span>
+              ) : null}
+            </div>
+            {actions ? <div className="shrink-0">{actions}</div> : null}
           </div>
+          {/* Taxonomy — type stays a single anchor pill; the categories collapse
+              to one compact dot-separated metadata line so they read as a single
+              row that wraps, instead of a tall stack of individual boxes. */}
+          {profile?.subnet_type || categories.length > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {profile?.subnet_type ? (
+                <span className="rounded border border-border bg-surface/40 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink-muted">
+                  {profile.subnet_type}
+                </span>
+              ) : null}
+              {categories.length > 0 ? (
+                <span className="font-mono text-[10px] uppercase tracking-wider text-ink-muted">
+                  {categories.join(" · ")}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           {description ? (
             <p className="mt-2 text-sm text-ink-muted max-w-3xl leading-relaxed line-clamp-2">
               {description}
