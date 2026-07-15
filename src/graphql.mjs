@@ -200,6 +200,13 @@ import {
   loadChainServing,
 } from "./chain-serving.mjs";
 import {
+  CHAIN_DEREGISTRATIONS_LIMIT_DEFAULT,
+  CHAIN_DEREGISTRATIONS_LIMIT_MAX,
+  CHAIN_DEREGISTRATIONS_WINDOWS,
+  DEFAULT_CHAIN_DEREGISTRATIONS_WINDOW,
+  loadChainDeregistrations,
+} from "./chain-deregistrations.mjs";
+import {
   buildChainTurnover,
   CHAIN_TURNOVER_LIMIT_DEFAULT,
   CHAIN_TURNOVER_LIMIT_MAX,
@@ -364,6 +371,8 @@ export const SDL = `
     chain_weights(window: String, limit: Int): ChainWeights!
     "Network-wide axon-serving announcement leaderboard over a 7d/30d window (default 7d): subnets ranked by AxonServed announcements with each's distinct-server count and announcements-per-server re-announcement intensity, plus a network rollup and the per-subnet intensity spread, summed live from the account_events stream. The network-wide counterpart of subnet_serving. limit caps the leaderboard (default 20, max 100). A cold store yields a schema-stable zeroed card, never a GraphQL error. Mirrors GET /api/v1/chain/serving."
     chain_serving(window: String, limit: Int): ChainServing!
+    "Network-wide NeuronDeregistered leaderboard over a 7d/30d window (default 7d): subnets ranked by NeuronDeregistered events with each's distinct-deregistered-hotkey count and deregistrations-per-hotkey churn intensity, plus a network rollup and the per-subnet intensity spread, summed live from the account_events stream. The network-wide counterpart of subnet_deregistrations. limit caps the leaderboard (default 20, max 100). A cold store yields a schema-stable zeroed card, never a GraphQL error. Mirrors GET /api/v1/chain/deregistrations."
+    chain_deregistrations(window: String, limit: Int): ChainDeregistrations!
     "Extrinsic call-mix breakdown over a 7d/30d window (default 7d): the extrinsic count and share per call_module, or per call_module+call_function when group_by is module_function (default module), optionally scoped to a single call_module, ranked by count (limit default 50, max 100). Computed live from the extrinsics tier; a cold store yields a schema-stable empty breakdown, never a GraphQL error. Mirrors GET /api/v1/chain/calls."
     chain_calls(window: String, group_by: String, limit: Int, call_module: String): ChainCalls!
     "Network-wide Prometheus telemetry-endpoint announcement leaderboard over a 7d/30d window (default 7d): subnets ranked by PrometheusServed announcements with each's distinct-exporter count and announcements-per-exporter re-announcement intensity, plus a network rollup and the per-subnet intensity spread, summed live from the account_events stream. The telemetry-endpoint companion to chain_serving's axon endpoints -- which subnets run observability infrastructure. limit caps the leaderboard (default 20, max 100). A cold store yields a schema-stable zeroed card, never a GraphQL error. Mirrors GET /api/v1/chain/prometheus."
@@ -705,6 +714,45 @@ export const SDL = `
     distinct_servers: Int!
     announcements: Int!
     announcements_per_server: Float
+  }
+
+  "Network-wide NeuronDeregistered leaderboard (#5877). The network-wide counterpart of subnet_deregistrations. Mirrors GET /api/v1/chain/deregistrations' data envelope."
+  type ChainDeregistrations {
+    schema_version: Int!
+    window: String
+    observed_at: String
+    subnet_count: Int!
+    network: ChainDeregistrationsNetwork!
+    intensity_distribution: ChainDeregistrationsIntensityDistribution
+    subnets: [ChainDeregistrationsSubnet!]!
+  }
+
+  "Network-wide deregistration rollup: every subnet with NeuronDeregistered events in the window, combined."
+  type ChainDeregistrationsNetwork {
+    distinct_deregistered_hotkeys: Int!
+    deregistrations: Int!
+    "Null when distinct_deregistered_hotkeys is 0 (no defined intensity without hotkeys)."
+    deregistrations_per_hotkey: Float
+  }
+
+  "Spread of per-subnet deregistration intensity (NeuronDeregistered events per hotkey) across EVERY subnet with deregistrations in the window -- network-wide even when limit truncates the leaderboard."
+  type ChainDeregistrationsIntensityDistribution {
+    count: Int!
+    mean: Float!
+    min: Float!
+    p25: Float!
+    median: Float!
+    p75: Float!
+    p90: Float!
+    max: Float!
+  }
+
+  "One subnet's deregistration activity in the window, ranked by deregistrations."
+  type ChainDeregistrationsSubnet {
+    netuid: Int!
+    distinct_deregistered_hotkeys: Int!
+    deregistrations: Int!
+    deregistrations_per_hotkey: Float
   }
 
   type ChainPrometheus {
@@ -2298,6 +2346,7 @@ export const FIELD_COMPLEXITY = {
   chain_calls: RELATIONSHIP_FIELD_COMPLEXITY,
   chain_weights: RELATIONSHIP_FIELD_COMPLEXITY,
   chain_serving: RELATIONSHIP_FIELD_COMPLEXITY,
+  chain_deregistrations: RELATIONSHIP_FIELD_COMPLEXITY,
   chain_prometheus: RELATIONSHIP_FIELD_COMPLEXITY,
   chain_weight_setters: RELATIONSHIP_FIELD_COMPLEXITY,
   health_trends: RELATIONSHIP_FIELD_COMPLEXITY,
@@ -5035,6 +5084,53 @@ const rootValue = {
         distinct_exporters: 0,
         announcements: 0,
         announcements_per_exporter: null,
+      },
+      intensity_distribution: data.intensity_distribution ?? null,
+      subnets: data.subnets || [],
+    };
+  },
+
+  async chain_deregistrations({ window, limit }, context) {
+    const requestedWindow = window ?? DEFAULT_CHAIN_DEREGISTRATIONS_WINDOW;
+    if (!Object.hasOwn(CHAIN_DEREGISTRATIONS_WINDOWS, requestedWindow)) {
+      throw new GraphQLError(
+        unsupportedWindowMessage(
+          requestedWindow,
+          CHAIN_DEREGISTRATIONS_WINDOWS,
+        ),
+        { extensions: { code: "BAD_USER_INPUT" } },
+      );
+    }
+    const safeLimit = clampLimit(limit, {
+      defaultLimit: CHAIN_DEREGISTRATIONS_LIMIT_DEFAULT,
+      maxLimit: CHAIN_DEREGISTRATIONS_LIMIT_MAX,
+    });
+    const params = new URLSearchParams();
+    params.set("window", requestedWindow);
+    params.set("limit", String(safeLimit));
+    // Same tryPostgresTier(METAGRAPH_ACCOUNT_EVENTS_SOURCE) -> loadChainDeregistrations
+    // fallback contract REST's chainDeregistrations route uses -- a cold store yields a
+    // schema-stable zeroed card, never a GraphQL error.
+    const data =
+      (await tryPostgresTier(
+        context.env,
+        postgresTierRequest(context, "/api/v1/chain/deregistrations", params),
+        "METAGRAPH_ACCOUNT_EVENTS_SOURCE",
+      )) ??
+      (await loadChainDeregistrations(graphqlD1(context), {
+        windowLabel: requestedWindow,
+        windowDays: CHAIN_DEREGISTRATIONS_WINDOWS[requestedWindow],
+        limit: safeLimit,
+      }));
+    return {
+      schema_version: data.schema_version ?? 1,
+      window: data.window ?? requestedWindow,
+      observed_at: data.observed_at ?? null,
+      subnet_count: data.subnet_count ?? 0,
+      network: data.network ?? {
+        distinct_deregistered_hotkeys: 0,
+        deregistrations: 0,
+        deregistrations_per_hotkey: null,
       },
       intensity_distribution: data.intensity_distribution ?? null,
       subnets: data.subnets || [],
